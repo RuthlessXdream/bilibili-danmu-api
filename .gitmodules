@@ -1,0 +1,3 @@
+[submodule "blivedm-go"]
+	path = blivedm-go
+	url = https://github.com/Akegarasu/blivedm-go.git

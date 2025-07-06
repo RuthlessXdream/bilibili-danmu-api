@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B站弹幕WebSocket测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #messages {
+            height: 400px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .danmaku {
+            background-color: #e8f4ff;
+        }
+        .superchat {
+            background-color: #fff0e8;
+        }
+        .gift {
+            background-color: #e8fff0;
+        }
+        .guard {
+            background-color: #f0e8ff;
+        }
+        .system {
+            background-color: #f0f0f0;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        input, button {
+            padding: 8px;
+            margin-right: 10px;
+        }
+        button {
+            cursor: pointer;
+        }
+        .status {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        .connected {
+            color: green;
+        }
+        .disconnected {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>B站弹幕WebSocket测试</h1>
+    
+    <div class="controls">
+        <input type="text" id="roomId" placeholder="输入房间号" value="31025025">
+        <button id="connectBtn">连接</button>
+        <button id="disconnectBtn">断开</button>
+    </div>
+    
+    <div class="status">状态: <span id="status" class="disconnected">未连接</span></div>
+    
+    <h2>实时消息</h2>
+    <div id="messages"></div>
+    
+    <script>
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const roomIdInput = document.getElementById('roomId');
+        const messagesDiv = document.getElementById('messages');
+        const statusSpan = document.getElementById('status');
+        
+        let ws = null;
+        
+        function appendMessage(type, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = content;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function formatTime() {
+            const now = new Date();
+            return now.toLocaleTimeString();
+        }
+        
+        connectBtn.addEventListener('click', () => {
+            const roomId = roomIdInput.value.trim();
+            if (!roomId) {
+                alert('请输入房间号');
+                return;
+            }
+            
+            // 先连接到房间
+            fetch(`http://localhost:8081/api/rooms/${roomId}/connect`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    appendMessage('system', `[${formatTime()}] 已连接到房间 ${roomId}`);
+                    
+                    // 然后建立WebSocket连接
+                    if (ws) {
+                        ws.close();
+                    }
+                    
+                    ws = new WebSocket(`ws://localhost:8081/api/rooms/${roomId}/ws`);
+                    
+                    ws.onopen = () => {
+                        statusSpan.textContent = '已连接';
+                        statusSpan.className = 'connected';
+                        appendMessage('system', `[${formatTime()}] WebSocket连接已建立`);
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            console.log('收到消息:', data);
+                            
+                            switch (data.event) {
+                                case 'danmaku':
+                                    const user = data.data.user;
+                                    const content = data.data.content;
+                                    let medalInfo = '';
+                                    if (user.medal && user.medal.level > 0) {
+                                        medalInfo = `[${user.medal.name}|${user.medal.level}] `;
+                                    }
+                                    appendMessage('danmaku', `[${formatTime()}] [弹幕] ${medalInfo}${user.username}: ${content.message}`);
+                                    break;
+                                    
+                                case 'superchat':
+                                    appendMessage('superchat', `[${formatTime()}] [SC|${data.data.price}元] ${data.data.user}: ${data.data.message}`);
+                                    break;
+                                    
+                                case 'gift':
+                                    appendMessage('gift', `[${formatTime()}] [礼物] ${data.data.username} 的 ${data.data.gift_name} ${data.data.num}个`);
+                                    break;
+                                    
+                                case 'guard':
+                                    const guardLevel = ['', '总督', '提督', '舰长'][data.data.guard_level] || '舰长';
+                                    appendMessage('guard', `[${formatTime()}] [大航海] ${data.data.username} 开通了${guardLevel}`);
+                                    break;
+                                    
+                                case 'live_start':
+                                    appendMessage('system', `[${formatTime()}] [系统] 直播开始了`);
+                                    break;
+                                    
+                                case 'live_end':
+                                    appendMessage('system', `[${formatTime()}] [系统] 直播结束了`);
+                                    break;
+                                    
+                                default:
+                                    appendMessage('system', `[${formatTime()}] [未知事件] ${JSON.stringify(data)}`);
+                            }
+                        } catch (error) {
+                            console.error('解析消息失败:', error);
+                            appendMessage('system', `[${formatTime()}] [错误] 解析消息失败: ${error.message}`);
+                        }
+                    };
+                    
+                    ws.onclose = () => {
+                        statusSpan.textContent = '已断开';
+                        statusSpan.className = 'disconnected';
+                        appendMessage('system', `[${formatTime()}] WebSocket连接已关闭`);
+                    };
+                    
+                    ws.onerror = (error) => {
+                        console.error('WebSocket错误:', error);
+                        appendMessage('system', `[${formatTime()}] [错误] WebSocket错误`);
+                    };
+                } else {
+                    appendMessage('system', `[${formatTime()}] 连接房间失败: ${data.message || '未知错误'}`);
+                }
+            })
+            .catch(error => {
+                console.error('连接请求失败:', error);
+                appendMessage('system', `[${formatTime()}] [错误] 连接请求失败: ${error.message}`);
+            });
+        });
+        
+        disconnectBtn.addEventListener('click', () => {
+            const roomId = roomIdInput.value.trim();
+            if (!roomId) {
+                alert('请输入房间号');
+                return;
+            }
+            
+            // 关闭WebSocket连接
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
+            // 断开房间连接
+            fetch(`http://localhost:8081/api/rooms/${roomId}/disconnect`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    appendMessage('system', `[${formatTime()}] 已断开与房间 ${roomId} 的连接`);
+                    statusSpan.textContent = '未连接';
+                    statusSpan.className = 'disconnected';
+                } else {
+                    appendMessage('system', `[${formatTime()}] 断开连接失败: ${data.message || '未知错误'}`);
+                }
+            })
+            .catch(error => {
+                console.error('断开请求失败:', error);
+                appendMessage('system', `[${formatTime()}] [错误] 断开请求失败: ${error.message}`);
+            });
+        });
+    </script>
+</body>
+</html> 
